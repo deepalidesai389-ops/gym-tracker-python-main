@@ -85,6 +85,7 @@ curl localhost:8080/health
 database and no HTTP. Start your tests there. Use pytest:
 `pytest --cov=app --cov-report=term-missing`. Minimum 70%.
 
+Formula choice: The app uses Epley as the default formula for one-rep-max estimation and comparison because it provides a simple and consistent estimate across the supported 1–12 rep range. Brzycki is also supported as an alternative formula when explicitly selected. The selected formula is included in the Redis personal-best key so results from different formulas remain separate.
 The module docstring hands you a pair of sets where Epley and Brzycki give opposite answers. Write that test first, then decide which formula the app commits to and why. Then check that `compare` never says both sets won, and that a 12-rep set is accepted while a 13-rep set is refused.
 
 ## Why Redis is here
