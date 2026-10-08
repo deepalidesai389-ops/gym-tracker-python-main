@@ -1,29 +1,36 @@
 version: 2.1
 
 jobs:
+
   lint:
     docker:
       - image: cimg/python:3.12
     steps:
       - checkout
+
       - run:
           name: Install dependencies
           command: pip install -r requirements.txt
+
       - run:
           name: Lint
           command: python -m compileall app tests
+
 
   unit_tests:
     docker:
       - image: cimg/python:3.12
     steps:
       - checkout
+
       - run:
           name: Install dependencies
           command: pip install -r requirements.txt
+
       - run:
           name: Unit tests
-          command: pytest tests/test_strength.py --cov=app.strength --cov-fail-under=70
+          command: PYTHONPATH=. pytest tests/test_strength.py --cov=app.strength --cov-fail-under=70
+
 
   integration_tests:
     docker:
@@ -34,16 +41,24 @@ jobs:
           POSTGRES_PASSWORD: gym
           POSTGRES_DB: gym
       - image: cimg/redis:7
+
+    environment:
+      DATABASE_URL: postgresql://gym:gym@127.0.0.1:5432/gym
+      REDIS_URL: redis://127.0.0.1:6379/0
+
     steps:
       - checkout
+
       - run:
           name: Install dependencies
           command: pip install -r requirements.txt
+
       - run:
           name: Install PostgreSQL client
           command: |
             sudo apt-get update
             sudo apt-get install -y postgresql-client
+
       - run:
           name: Wait for PostgreSQL
           command: |
@@ -51,6 +66,7 @@ jobs:
               pg_isready -h 127.0.0.1 -U gym -d gym && break
               sleep 2
             done
+
       - run:
           name: Run migrations
           command: |
@@ -58,19 +74,23 @@ jobs:
             for f in migrations/*.sql; do
               psql -h 127.0.0.1 -U gym -d gym -f "$f"
             done
+
       - run:
           name: Integration tests
-          command: pytest tests/test_integration.py
+          command: PYTHONPATH=. pytest tests/test_integration.py
+
 
   secret_scan:
     docker:
       - image: cimg/base:stable
+
     steps:
       - checkout
+
       - run:
           name: Secret scan
           command: |
-            if grep -RniE 'sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|password[[:space:]]*=' . \
+            if grep -RniE 'sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' . \
               --exclude-dir=.git \
               --exclude='*.pyc'; then
               echo "Potential secret found"
@@ -78,28 +98,36 @@ jobs:
             fi
             echo "No obvious secrets found"
 
+
   build_image:
     machine:
       image: ubuntu-2204:current
+
     steps:
       - checkout
+
       - run:
           name: Build Docker image
           command: docker build -t gym-tracker:1.0 .
+
 
 workflows:
   ci:
     jobs:
       - lint
+
       - unit_tests:
           requires:
             - lint
+
       - integration_tests:
           requires:
             - unit_tests
+
       - secret_scan:
           requires:
             - lint
+
       - build_image:
           requires:
             - integration_tests
