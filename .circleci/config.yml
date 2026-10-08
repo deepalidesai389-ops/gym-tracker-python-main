@@ -35,12 +35,12 @@ jobs:
   integration_tests:
     docker:
       - image: cimg/python:3.12
-      - image: cimg/postgres:16
+      - image: postgres:16
         environment:
           POSTGRES_USER: gym
           POSTGRES_PASSWORD: gym
           POSTGRES_DB: gym
-      - image: cimg/redis:7
+      - image: redis:7
 
     environment:
       DATABASE_URL: postgresql://gym:gym@127.0.0.1:5432/gym
