@@ -1,36 +1,30 @@
+
 version: 2.1
 
 jobs:
-
   lint:
     docker:
       - image: cimg/python:3.12
     steps:
       - checkout
-
       - run:
           name: Install dependencies
           command: pip install -r requirements.txt
-
       - run:
-          name: Lint
-          command: python -m compileall app tests
-
+          name: Check Python syntax
+          command: python -m compileall -q app tests
 
   unit_tests:
     docker:
       - image: cimg/python:3.12
     steps:
       - checkout
-
       - run:
           name: Install dependencies
           command: pip install -r requirements.txt
-
       - run:
-          name: Unit tests
+          name: Unit tests with coverage
           command: PYTHONPATH=. pytest tests/test_strength.py --cov=app.strength --cov-fail-under=70
-
 
   integration_tests:
     docker:
@@ -41,54 +35,59 @@ jobs:
           POSTGRES_PASSWORD: gym
           POSTGRES_DB: gym
       - image: redis:7
-
     environment:
       DATABASE_URL: postgresql://gym:gym@127.0.0.1:5432/gym
       REDIS_URL: redis://127.0.0.1:6379/0
-
     steps:
       - checkout
-
       - run:
           name: Install dependencies
           command: pip install -r requirements.txt
-
       - run:
           name: Install PostgreSQL client
           command: |
             sudo apt-get update
             sudo apt-get install -y postgresql-client
-
       - run:
           name: Wait for PostgreSQL
           command: |
-            for i in `seq 1 30`; do
-              pg_isready -h 127.0.0.1 -U gym -d gym && break
+            for i in $(seq 1 30); do
+              if pg_isready -h 127.0.0.1 -U gym -d gym; then
+                exit 0
+              fi
               sleep 2
             done
-
+            echo "PostgreSQL did not become ready"
+            exit 1
       - run:
-          name: Run migrations
+          name: Wait for Redis
+          command: |
+            for i in $(seq 1 30); do
+              if python -c "import redis; redis.Redis(host='127.0.0.1', port=6379).ping()" 2>/dev/null; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Redis did not become ready"
+            exit 1
+      - run:
+          name: Run database migrations
           command: |
             export PGPASSWORD=gym
             for f in migrations/*.sql; do
-              psql -h 127.0.0.1 -U gym -d gym -f "$f"
+              psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U gym -d gym -f "$f"
             done
-
       - run:
           name: Integration tests
           command: PYTHONPATH=. pytest tests/test_integration.py
 
-
   secret_scan:
     docker:
       - image: cimg/base:stable
-
     steps:
       - checkout
-
       - run:
-          name: Secret scan
+          name: Scan for common exposed secrets
           command: |
             if grep -RniE 'sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}' . \
               --exclude-dir=.git \
@@ -96,20 +95,47 @@ jobs:
               echo "Potential secret found"
               exit 1
             fi
-            echo "No obvious secrets found"
+            echo "No obvious matching secrets found"
 
-
-  build_image:
+  build_and_publish:
     machine:
       image: ubuntu-2204:current
-
     steps:
       - checkout
-
       - run:
-          name: Build Docker image
-          command: docker build -t gym-tracker:1.0 .
+          name: Build and publish Docker images
+          command: |
+            set -e
 
+            if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_PASSWORD" ]; then
+              echo "Configure DOCKERHUB_USERNAME and DOCKERHUB_PASSWORD in CircleCI."
+              exit 1
+            fi
+
+            echo "$DOCKERHUB_PASSWORD" | docker login \
+              -u "$DOCKERHUB_USERNAME" --password-stdin
+
+            SHORT_SHA=$(echo "$CIRCLE_SHA1" | cut -c1-7)
+            IMAGE="$DOCKERHUB_USERNAME/gym-tracker-python-main"
+
+            case "$CIRCLE_BRANCH" in
+              main) TAG="qa" ;;
+              staging) TAG="stage" ;;
+              prod) TAG="prod" ;;
+              *)
+                echo "Publishing is not enabled for branch $CIRCLE_BRANCH"
+                exit 1
+                ;;
+            esac
+
+            docker build \
+              -t "$IMAGE:$TAG" \
+              -t "$IMAGE:$SHORT_SHA" .
+
+            docker push "$IMAGE:$TAG"
+            docker push "$IMAGE:$SHORT_SHA"
+
+            docker logout
 
 workflows:
   ci:
@@ -128,7 +154,13 @@ workflows:
           requires:
             - lint
 
-      - build_image:
+      - build_and_publish:
           requires:
             - integration_tests
             - secret_scan
+          filters:
+            branches:
+              only:
+                - main
+                - staging
+                - prod
